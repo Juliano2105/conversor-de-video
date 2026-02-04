@@ -120,8 +120,18 @@ export const useFFmpeg = () => {
 
         } catch (err) {
             if (status !== 'cancelled') {
-                console.error('Conversion error:', err);
-                setErrorMessage('Ocorreu um erro durante a conversão.');
+                console.error('Conversion error details:', err);
+
+                let msg = 'Ocorreu um erro durante a conversão.';
+                const errorStr = String(err).toLowerCase();
+
+                if (errorStr.includes('memory') || errorStr.includes('buffer') || file.size > 500 * 1024 * 1024) {
+                    msg = 'Erro de memória: O arquivo é muito grande para o seu navegador processar. Tente um vídeo menor (abaixo de 500MB).';
+                } else if (errorStr.includes('exec')) {
+                    msg = 'Erro no processamento do vídeo. Tente mudar as configurações de saída.';
+                }
+
+                setErrorMessage(msg);
                 setStatus('error');
             }
         }
