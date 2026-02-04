@@ -72,7 +72,6 @@ export const useFFmpeg = () => {
     const convert = async (file: File, options: ConversionOptions, duration: number) => {
         const hasTargetSize = options.targetSizeMB && options.targetSizeMB > 0;
 
-        // Define progressive attempts ONLY if we have a target size
         const attempts = hasTargetSize
             ? [
                 { id: 1, label: 'Otimizando qualidade...' },
@@ -87,7 +86,6 @@ export const useFFmpeg = () => {
             if (status as string === 'cancelled') break;
 
             try {
-                // Ensure fresh state for each attempt
                 if (ffmpegRef.current) {
                     try { ffmpegRef.current.terminate(); } catch (e) { }
                     ffmpegRef.current = null;
@@ -96,6 +94,8 @@ export const useFFmpeg = () => {
                 const ffmpeg = await loadFFmpeg();
                 setStatus('converting');
                 startTimeRef.current = Date.now();
+                logsRef.current = [`Tentativa ${attempt.id} iniciada...`];
+                setProgress(prev => ({ ...prev, debugLog: logsRef.current }));
 
                 const inputExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase() || '.mp4';
                 const inputName = `input${inputExt}`;
@@ -104,23 +104,28 @@ export const useFFmpeg = () => {
                 const { fetchFile } = await import('@ffmpeg/util');
 
                 // Progress report
-                setProgress(prev => ({
-                    ...prev,
-                    percentage: 0,
-                    appliedStrategy: hasTargetSize
-                        ? `Preparando arquivo... (Tentativa ${attempt.id}/5)`
-                        : 'Preparando conversão local...'
-                }));
+                const strategyMsg = hasTargetSize
+                    ? `Preparando arquivo... (Tentativa ${attempt.id}/5)`
+                    : 'Preparando conversão local...';
+
+                setProgress(prev => ({ ...prev, percentage: 0, appliedStrategy: strategyMsg }));
+
+                logsRef.current.push('Status: Lendo e escrevendo arquivo no FS virtual...');
+                setProgress(prev => ({ ...prev, debugLog: [...logsRef.current] }));
 
                 await ffmpeg.writeFile(inputName, await fetchFile(file));
+                logsRef.current.push('Status: Arquivo gravado com sucesso.');
+                setProgress(prev => ({ ...prev, debugLog: [...logsRef.current] }));
 
-                const args: string[] = ['-i', inputName];
+                // --- BUILD ARGS ---
+                const args: string[] = [];
 
-                // MOV/MP4 optimization headers
-                args.push('-movflags', '+faststart');
+                // Logic: Global/Input flags first
                 if (inputExt === '.mov') {
-                    args.splice(1, 0, '-fflags', '+genpts');
+                    args.push('-fflags', '+genpts');
                 }
+                args.push('-i', inputName);
+                args.push('-movflags', '+faststart');
 
                 // --- PATH A: BITRATE (TARGET SIZE DEFINED) ---
                 if (hasTargetSize) {
@@ -158,7 +163,6 @@ export const useFFmpeg = () => {
                     const crfValues = { low: 28, medium: 23, high: 18 };
                     args.push('-crf', crfValues[options.quality].toString());
 
-                    // Maintain resolution/fps if possible, or just use scale filter for even dims
                     const w = options.width || 1280;
                     const h = options.height || 720;
                     const finalW = w % 2 === 0 ? w : w - 1;
@@ -167,7 +171,7 @@ export const useFFmpeg = () => {
                 }
 
                 // Common settings
-                args.push('-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p');
+                args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p');
 
                 if (options.stripAudio || (hasTargetSize && attempt.id >= 4)) {
                     args.push('-an');
@@ -182,9 +186,15 @@ export const useFFmpeg = () => {
                     appliedStrategy: hasTargetSize ? `Processando: ${attempt.label}` : 'Estratégia: Alta Qualidade Local'
                 }));
 
+                logsRef.current.push(`Status: Executando comando: ffmpeg ${args.join(' ')}`);
+                setProgress(prev => ({ ...prev, debugLog: [...logsRef.current] }));
+
                 await ffmpeg.exec(args);
 
                 if (status as string === 'cancelled') return;
+
+                logsRef.current.push('Status: Conversão concluída. Lendo resultado...');
+                setProgress(prev => ({ ...prev, debugLog: [...logsRef.current] }));
 
                 const data = await ffmpeg.readFile(outputName);
                 const blob = new Blob([data as any], { type: 'video/mp4' });
@@ -199,14 +209,18 @@ export const useFFmpeg = () => {
                 return;
 
             } catch (err) {
-                console.error(`Conversion ${hasTargetSize ? 'Attempt ' + attempt.id : ''} Error:`, err);
+                console.error(`Attempt Error:`, err);
+                logsRef.current.push(`ERRO: ${String(err)}`);
+                setProgress(prev => ({ ...prev, debugLog: [...logsRef.current] }));
 
                 if (ffmpegRef.current) {
                     try { ffmpegRef.current.terminate(); } catch (e) { }
                     ffmpegRef.current = null;
                 }
 
-                if (!hasTargetSize || attempt.id === 5) {
+                const isLastAttempt = !hasTargetSize || attempt.id === (hasTargetSize ? 5 : 1);
+
+                if (isLastAttempt) {
                     const baseMsg = hasTargetSize
                         ? 'Seu navegador não conseguiu processar com esse tamanho alvo agressivo.'
                         : 'Ocorreu um erro inesperado durante a conversão local.';
