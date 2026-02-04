@@ -75,6 +75,15 @@ export const ConverterContainer: React.FC = () => {
     return (
         <div className="bg-white rounded-3xl shadow-xl shadow-indigo-100/40 border border-gray-100 overflow-hidden ring-1 ring-gray-900/5">
             <div className="p-6 md:p-10">
+                {!progress.isIsolated && (
+                    <div className="mb-8 p-4 bg-amber-50 border border-amber-100 rounded-2xl flex items-center gap-3 text-amber-800 animate-in slide-in-from-top-4 duration-500">
+                        <AlertTriangle className="w-5 h-5 shrink-0" />
+                        <p className="text-xs font-medium">
+                            <span className="font-bold">Aviso:</span> Ambiente sem isolamento de origem. O conversor pode ser instável ou falhar.
+                        </p>
+                    </div>
+                )}
+
                 {status === 'idle' && (
                     <VideoUpload onFileSelect={onFileChange} />
                 )}
@@ -96,16 +105,29 @@ export const ConverterContainer: React.FC = () => {
                         </div>
 
                         {errorMessage && (
-                            <div className="p-5 bg-red-50 border border-red-100 rounded-2xl flex flex-col gap-2 text-red-700 animate-in shake duration-500">
-                                <div className="flex items-center gap-3">
-                                    <AlertTriangle className="w-6 h-6 shrink-0" />
-                                    <p className="text-sm font-bold tracking-tight">{errorMessage}</p>
+                            <div className="space-y-4">
+                                <div className="p-5 bg-red-50 border border-red-100 rounded-2xl flex flex-col gap-2 text-red-700 animate-in shake duration-500">
+                                    <div className="flex items-center gap-3">
+                                        <AlertTriangle className="w-6 h-6 shrink-0" />
+                                        <p className="text-sm font-bold tracking-tight">{errorMessage}</p>
+                                    </div>
+                                    <div className="pl-9 space-y-1">
+                                        <p className="text-[11px] opacity-80 leading-relaxed font-medium">
+                                            Dica: Para vídeos longos ({'>'}10min), use um tamanho alvo acima de 30MB ou reduza a resolução para 480p ou menos no modo Manual.
+                                        </p>
+                                    </div>
                                 </div>
-                                <div className="pl-9 space-y-1">
-                                    <p className="text-[11px] opacity-80 leading-relaxed font-medium">
-                                        Dica: Para vídeos longos (>10min), use um tamanho alvo acima de 30MB ou reduza a resolução para 480p ou menos no modo Manual.
-                                    </p>
-                                </div>
+
+                                {progress.debugLog && progress.debugLog.length > 0 && (
+                                    <div className="p-4 bg-gray-900 rounded-xl font-mono text-[10px] text-gray-400 overflow-hidden">
+                                        <p className="text-gray-500 mb-2 uppercase font-bold tracking-widest">FFmpeg Debug Output:</p>
+                                        <div className="space-y-1">
+                                            {progress.debugLog.map((log, i) => (
+                                                <div key={i} className="truncate border-l border-gray-800 pl-2">{log}</div>
+                                            ))}
+                                        </div>
+                                    </div>
+                                )}
                             </div>
                         )}
 

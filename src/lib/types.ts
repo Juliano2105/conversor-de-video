@@ -22,4 +22,6 @@ export interface ConversionProgress {
     timeElapsed: number;
     timeRemaining?: number;
     appliedStrategy?: string;
+    debugLog?: string[];
+    isIsolated?: boolean;
 }

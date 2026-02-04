@@ -8,15 +8,25 @@ const WASM_URL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wa
 
 export const useFFmpeg = () => {
     const [status, setStatus] = useState<ConversionStatus>('idle');
-    const [progress, setProgress] = useState<ConversionProgress>({ percentage: 0, timeElapsed: 0 });
+    const [progress, setProgress] = useState<ConversionProgress>({
+        percentage: 0,
+        timeElapsed: 0,
+        isIsolated: typeof window !== 'undefined' ? window.crossOriginIsolated : false,
+        debugLog: []
+    });
     const [outputBlob, setOutputBlob] = useState<Blob | null>(null);
     const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
     const ffmpegRef = useRef<FFmpeg | null>(null);
     const startTimeRef = useRef<number>(0);
+    const logsRef = useRef<string[]>([]);
 
     const loadFFmpeg = async () => {
         if (ffmpegRef.current) return ffmpegRef.current;
+
+        if (typeof window !== 'undefined' && !window.crossOriginIsolated) {
+            console.warn('Ambiente não isolado (COOP/COEP faltando). FFmpeg pode falhar.');
+        }
 
         try {
             // Dynamic import for browser-only FFmpeg
@@ -28,6 +38,8 @@ export const useFFmpeg = () => {
 
             ffmpeg.on('log', ({ message }) => {
                 console.log('FFmpeg log:', message);
+                logsRef.current = [...logsRef.current.slice(-19), message];
+                setProgress(prev => ({ ...prev, debugLog: logsRef.current }));
             });
 
             ffmpeg.on('progress', ({ progress: p }) => {
@@ -51,7 +63,7 @@ export const useFFmpeg = () => {
             return ffmpeg;
         } catch (err) {
             console.error('FFmpeg Load Error:', err);
-            setErrorMessage('Erro ao carregar o motor de conversão (FFmpeg Load Failure).');
+            setErrorMessage('Erro ao carregar o motor de conversão (FFmpeg Load Failure). Verifique se os cabeçalhos COOP/COEP estão ativos.');
             setStatus('error');
             throw err;
         }
