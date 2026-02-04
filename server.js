@@ -22,8 +22,8 @@ app.use((req, res, next) => {
 // Serve static files from the build folder
 app.use(express.static(distPath));
 
-// Send all other requests to index.html (Express 5 requires a name for wildcards)
-app.get('/:splat*', (req, res) => {
+// Fallback to index.html for SPA routing (Express 5 safe)
+app.use((req, res) => {
     if (fs.existsSync(indexPath)) {
         res.sendFile(indexPath);
     } else {
