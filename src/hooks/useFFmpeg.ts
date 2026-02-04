@@ -2,9 +2,9 @@ import { useState, useRef, useCallback } from 'react';
 import type { FFmpeg } from '@ffmpeg/ffmpeg';
 import type { ConversionStatus, ConversionOptions, ConversionProgress } from '../lib/types';
 
-// Use stable absolute CDN URLs
-const CORE_URL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.js';
-const WASM_URL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd/ffmpeg-core.wasm';
+// Use stable absolute CDN URLs (v0.12.6 as suggested for stability)
+const CORE_URL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/ffmpeg-core.js';
+const WASM_URL = 'https://unpkg.com/@ffmpeg/core@0.12.6/dist/ffmpeg-core.wasm';
 
 export const useFFmpeg = () => {
     const [status, setStatus] = useState<ConversionStatus>('idle');
@@ -22,7 +22,7 @@ export const useFFmpeg = () => {
     const logsRef = useRef<string[]>([]);
 
     const loadFFmpeg = async () => {
-        if (ffmpegRef.current) return ffmpegRef.current;
+        if (ffmpegRef.current && (ffmpegRef.current as any).loaded) return ffmpegRef.current;
 
         if (typeof window !== 'undefined' && !window.crossOriginIsolated) {
             console.warn('Ambiente não isolado (COOP/COEP faltando). FFmpeg pode falhar.');
