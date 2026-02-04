@@ -29,9 +29,11 @@ export const useFFmpeg = () => {
         }
 
         try {
-            // Dynamic import for browser-only FFmpeg
-            const { FFmpeg } = await import('@ffmpeg/ffmpeg');
-            const { toBlobURL } = await import('@ffmpeg/util');
+            // Dynamic import for browser-only components
+            const [{ FFmpeg }, { toBlobURL }] = await Promise.all([
+                import('@ffmpeg/ffmpeg'),
+                import('@ffmpeg/util')
+            ]);
 
             setStatus('loading_ffmpeg');
             const ffmpeg = new FFmpeg();
@@ -54,16 +56,20 @@ export const useFFmpeg = () => {
                 }));
             });
 
+            // EXPLICIT BLOB LOADING
+            const coreURL = await toBlobURL(CORE_URL, 'text/javascript');
+            const wasmURL = await toBlobURL(WASM_URL, 'application/wasm');
+
             await ffmpeg.load({
-                coreURL: await toBlobURL(CORE_URL, 'text/javascript'),
-                wasmURL: await toBlobURL(WASM_URL, 'application/wasm'),
+                coreURL,
+                wasmURL,
             });
 
             ffmpegRef.current = ffmpeg;
             return ffmpeg;
         } catch (err) {
-            console.error('FFmpeg Load Error:', err);
-            setErrorMessage('Erro ao carregar o motor de conversão (FFmpeg Load Failure). Verifique se os cabeçalhos COOP/COEP estão ativos.');
+            console.error('ENGINE LOAD ERROR:', err);
+            setErrorMessage('Falha ao carregar o motor (FFmpeg Load Failure). Certifique-se que seu navegador suporta WebAssembly e os cabeçalhos COOP/COEP estão ativos.');
             setStatus('error');
             throw err;
         }
@@ -86,12 +92,21 @@ export const useFFmpeg = () => {
             if (status as string === 'cancelled') break;
 
             try {
-                if (ffmpegRef.current) {
+                // Ensure fresh state for each attempt if we are retrying
+                if (attempt.id > 1 && ffmpegRef.current) {
                     try { ffmpegRef.current.terminate(); } catch (e) { }
                     ffmpegRef.current = null;
                 }
 
+                logsRef.current.push(`Status: Inicializando motor (Tentativa ${attempt.id})...`);
+                setProgress(prev => ({ ...prev, debugLog: [...logsRef.current] }));
+
                 const ffmpeg = await loadFFmpeg();
+
+                // FINAL SAFETY CHECK
+                if (!(ffmpeg as any).loaded) {
+                    throw new Error('Motor FFmpeg não foi carregado corretamente.');
+                }
                 setStatus('converting');
                 startTimeRef.current = Date.now();
                 logsRef.current = [`Tentativa ${attempt.id} iniciada...`];
