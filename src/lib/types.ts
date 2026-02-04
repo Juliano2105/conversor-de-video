@@ -21,4 +21,5 @@ export interface ConversionProgress {
     percentage: number;
     timeElapsed: number;
     timeRemaining?: number;
+    appliedStrategy?: string;
 }

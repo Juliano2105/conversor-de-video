@@ -60,6 +60,13 @@ export const ConversionProgressBar: React.FC<ConversionProgressBarProps> = ({ pr
                     </div>
                 </div>
             </div>
+
+            {progress.appliedStrategy && (
+                <div className="p-3 bg-indigo-50 border border-indigo-100 rounded-xl animate-in slide-in-from-left-2 duration-500">
+                    <p className="text-[10px] text-indigo-400 font-bold uppercase tracking-wider mb-1">Estratégia Aplicada</p>
+                    <p className="text-xs text-indigo-700 font-medium leading-relaxed">{progress.appliedStrategy}</p>
+                </div>
+            )}
         </div>
     );
 };

@@ -70,15 +70,6 @@ export const MetadataDisplay: React.FC<MetadataDisplayProps> = ({ metadata }) =>
             <div className="px-1 truncate">
                 <p className="text-xs text-gray-400 font-medium truncate">Arquivo: <span className="text-gray-600">{metadata.name}</span></p>
             </div>
-
-            {metadata.size > 500 * 1024 * 1024 && (
-                <div className="mt-2 p-3 bg-amber-50 border border-amber-100 rounded-lg text-[11px] text-amber-700 leading-tight">
-                    <p className="font-bold flex items-center gap-1 mb-1">
-                        ⚠️ Arquivo Grande
-                    </p>
-                    Navegadores têm limites de memória. Se a conversão falhar, tente um vídeo menor que 500MB.
-                </div>
-            )}
         </div>
     );
 };
