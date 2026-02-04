@@ -58,68 +58,94 @@ export const useFFmpeg = () => {
     };
 
     const convert = async (file: File, options: ConversionOptions, duration: number) => {
+        // Define progressive attempts with clearer labels and steps
         const attempts = [
-            { id: 1, label: 'Otimizando qualidade e bitrate...' },
-            { id: 2, label: 'Ajustando taxa de quadros (FPS: 20)' },
-            { id: 3, label: 'Reduzindo resolução para economia de memória' },
-            { id: 4, label: 'Modo de Emergência: Removendo áudio' }
+            { id: 1, label: 'Otimizando qualidade...' },
+            { id: 2, label: 'Ajustando fluidez (FPS: 20)' },
+            { id: 3, label: 'Reduzindo impacto visual (30% menor)' },
+            { id: 4, label: 'Modo de Segurança: Removendo áudio' },
+            { id: 5, label: 'Modo Crítico: Resolução mínima (360p)' }
         ];
 
         for (const attempt of attempts) {
             if (status as string === 'cancelled') break;
 
             try {
-                // FORCE FRESH WORKER for each retry attempt
+                // Ensure fresh state for each attempt
                 if (ffmpegRef.current) {
                     try { ffmpegRef.current.terminate(); } catch (e) { }
                     ffmpegRef.current = null;
                 }
 
-                // Load engine
                 const ffmpeg = await loadFFmpeg();
                 setStatus('converting');
                 startTimeRef.current = Date.now();
 
-                const inputName = 'input' + (file.name.substring(file.name.lastIndexOf('.')) || '.mp4');
+                const inputExt = file.name.substring(file.name.lastIndexOf('.')).toLowerCase() || '.mp4';
+                const inputName = `input${inputExt}`;
                 const outputName = 'output.mp4';
 
                 const { fetchFile } = await import('@ffmpeg/util');
+
+                // Progress report before heavy file operation
+                setProgress(prev => ({
+                    ...prev,
+                    percentage: 0,
+                    appliedStrategy: `Preparando arquivo... (Tentativa ${attempt.id}/5)`
+                }));
+
                 await ffmpeg.writeFile(inputName, await fetchFile(file));
 
                 const args: string[] = ['-i', inputName];
 
+                // MOV handling for stability
+                if (inputExt === '.mov') {
+                    args.splice(1, 0, '-fflags', '+genpts');
+                }
+
                 // --- STRATEGY CALCULATION ---
                 let targetVideoBitrate = 0;
-                let targetAudioBitrate = options.stripAudio || attempt.id === 4 ? 0 : 96;
+                let targetAudioBitrate = options.stripAudio || attempt.id >= 4 ? 0 : 96;
                 let targetFps = attempt.id >= 2 ? 20 : 24;
                 let targetWidth = options.width || 1280;
                 let targetHeight = options.height || 720;
 
-                // Scale down on Attempt 3
-                if (attempt.id >= 3) {
+                // Scale down logic
+                if (attempt.id === 3) {
                     targetWidth = Math.round(targetWidth * 0.7);
                     targetHeight = Math.round(targetHeight * 0.7);
+                } else if (attempt.id >= 5) {
+                    // Force 360p or lower on final attempt
+                    const ratio = targetWidth / targetHeight;
+                    if (targetWidth > targetHeight) {
+                        targetWidth = 640;
+                        targetHeight = Math.round(640 / ratio);
+                    } else {
+                        targetHeight = 640;
+                        targetWidth = Math.round(640 * ratio);
+                    }
                 }
 
                 if (options.targetSizeMB && duration > 0) {
                     const totalTargetBitrateKbps = (options.targetSizeMB * 8192) / duration;
-                    targetVideoBitrate = Math.max(totalTargetBitrateKbps - targetAudioBitrate, 300);
+                    targetVideoBitrate = Math.max(totalTargetBitrateKbps - targetAudioBitrate, 250);
                     args.push('-b:v', `${Math.round(targetVideoBitrate)}k`);
                     if (targetAudioBitrate > 0) {
                         args.push('-b:a', `${targetAudioBitrate}k`);
                     }
                 } else {
+                    // Variable bitrate
                     const crfMap = { low: 32, medium: 26, high: 21 };
                     args.push('-crf', crfMap[options.quality].toString());
                 }
 
-                // Res + FPS
+                // Ensure even dimensions for libx264
                 const finalW = targetWidth % 2 === 0 ? targetWidth : targetWidth - 1;
                 const finalH = targetHeight % 2 === 0 ? targetHeight : targetHeight - 1;
                 args.push('-vf', `scale=${finalW}:${finalH},fps=${targetFps}`);
 
-                // Codec for max compatibility
-                args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p');
+                // Codec tuning for browser memory
+                args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'fastdecode', '-pix_fmt', 'yuv420p');
 
                 if (targetAudioBitrate === 0) {
                     args.push('-an');
@@ -131,7 +157,7 @@ export const useFFmpeg = () => {
 
                 setProgress(prev => ({
                     ...prev,
-                    appliedStrategy: `Tentativa ${attempt.id}/4: ${attempt.label}`
+                    appliedStrategy: `Processando: ${attempt.label}`
                 }));
 
                 // EXECUTE
@@ -150,18 +176,22 @@ export const useFFmpeg = () => {
                     await ffmpeg.deleteFile(inputName);
                     await ffmpeg.deleteFile(outputName);
                 } catch (e) { }
-                return; // SUCCESS
+                return;
 
             } catch (err) {
-                console.error(`Attempt ${attempt.id} Failed:`, err);
+                console.error(`Attempt ${attempt.id} Error:`, err);
 
-                // If last attempt failed, show final error
-                if (attempt.id === 4) {
-                    setErrorMessage('Seu navegador não conseguiu converter com esse tamanho alvo. Tente aumentar o tamanho alvo ou reduzir a resolução manualmente.');
+                if (ffmpegRef.current) {
+                    try { ffmpegRef.current.terminate(); } catch (e) { }
+                    ffmpegRef.current = null;
+                }
+
+                if (attempt.id === 5) {
+                    setErrorMessage('O navegador atingiu o limite de memória. Tente um "Tamanho Alvo (MB)" maior ou reduza a resolução para 480p ou menos.');
                     setStatus('error');
                 } else {
-                    // Small delay before retry
-                    await new Promise(r => setTimeout(r, 1500));
+                    // Cooldown
+                    await new Promise(r => setTimeout(r, 1000));
                 }
             }
         }

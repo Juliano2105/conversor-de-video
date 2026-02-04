@@ -8,11 +8,10 @@
     "build": "tsc && vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start": "node server.js"
+    "start": "vite preview"
   },
   "dependencies": {
     "clsx": "^2.1.1",
-    "express": "^5.2.1",
     "framer-motion": "^12.31.0",
     "lucide-react": "^0.563.0",
     "react": "^19.2.0",

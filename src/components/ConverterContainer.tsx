@@ -96,19 +96,26 @@ export const ConverterContainer: React.FC = () => {
                         </div>
 
                         {errorMessage && (
-                            <div className="p-4 bg-red-50 border border-red-100 rounded-xl flex items-center gap-3 text-red-700">
-                                <AlertTriangle className="w-5 h-5 shrink-0" />
-                                <p className="text-sm font-medium">{errorMessage}</p>
+                            <div className="p-5 bg-red-50 border border-red-100 rounded-2xl flex flex-col gap-2 text-red-700 animate-in shake duration-500">
+                                <div className="flex items-center gap-3">
+                                    <AlertTriangle className="w-6 h-6 shrink-0" />
+                                    <p className="text-sm font-bold tracking-tight">{errorMessage}</p>
+                                </div>
+                                <div className="pl-9 space-y-1">
+                                    <p className="text-[11px] opacity-80 leading-relaxed font-medium">
+                                        Dica: Para vídeos longos (>10min), use um tamanho alvo acima de 30MB ou reduza a resolução para 480p ou menos no modo Manual.
+                                    </p>
+                                </div>
                             </div>
                         )}
 
                         <button
                             onClick={startConv}
                             disabled={false}
-                            className="w-full bg-indigo-600 text-white py-5 rounded-2xl font-bold text-lg hover:bg-indigo-700 transition-all flex items-center justify-center gap-3 shadow-lg shadow-indigo-100 disabled:bg-gray-400"
+                            className="w-full bg-indigo-600 text-white py-5 rounded-2xl font-bold text-lg hover:bg-indigo-700 transition-all flex items-center justify-center gap-3 shadow-lg shadow-indigo-100 active:scale-[0.98] disabled:bg-gray-400"
                         >
                             <PlayCircle className="w-6 h-6" />
-                            CONVERTER AGORA
+                            {status === 'error' ? 'TENTAR NOVAMENTE' : 'CONVERTER AGORA'}
                         </button>
 
                         <button
