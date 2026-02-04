@@ -1,6 +1,5 @@
 import { useState, useRef, useCallback } from 'react';
-import { FFmpeg } from '@ffmpeg/ffmpeg';
-import { fetchFile, toBlobURL } from '@ffmpeg/util';
+import type { FFmpeg } from '@ffmpeg/ffmpeg';
 import type { ConversionStatus, ConversionOptions, ConversionProgress } from '../lib/types';
 
 const BASE_URL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
@@ -17,6 +16,10 @@ export const useFFmpeg = () => {
     const loadFFmpeg = async () => {
         if (ffmpegRef.current) return ffmpegRef.current;
 
+        // Dynamic import for browser-only FFmpeg
+        const { FFmpeg } = await import('@ffmpeg/ffmpeg');
+        const { toBlobURL } = await import('@ffmpeg/util');
+
         setStatus('loading_ffmpeg');
         const ffmpeg = new FFmpeg();
 
@@ -25,15 +28,15 @@ export const useFFmpeg = () => {
         });
 
         ffmpeg.on('progress', ({ progress: p }) => {
-            // time is in microseconds
             const percentage = Math.round(p * 100);
             const elapsed = (Date.now() - startTimeRef.current) / 1000;
 
-            setProgress({
+            setProgress(prev => ({
+                ...prev,
                 percentage,
                 timeElapsed: elapsed,
                 timeRemaining: percentage > 0 ? (elapsed / (percentage / 100)) - elapsed : undefined
-            });
+            }));
         });
 
         try {
@@ -52,162 +55,120 @@ export const useFFmpeg = () => {
     };
 
     const convert = async (file: File, options: ConversionOptions, duration: number) => {
-        let strategyLines: string[] = [];
-        try {
-            const ffmpeg = await loadFFmpeg();
-            setStatus('converting');
-            setProgress({ percentage: 0, timeElapsed: 0, appliedStrategy: 'Calculando melhor estratégia...' });
-            startTimeRef.current = Date.now();
+        // Define progressive attempts
+        const attempts = [
+            { id: 1, label: 'Otimizando qualidade...' },
+            { id: 2, label: 'Reduzindo taxa de quadros (FPS: 20)' },
+            { id: 3, label: 'Reduzindo resolução (30% menor)' },
+            { id: 4, label: 'Removendo áudio (Modo Emergência)' }
+        ];
 
-            const inputName = 'input' + (file.name.substring(file.name.lastIndexOf('.')) || '.mp4');
-            const outputName = options.format === 'mp4' ? 'output.mp4' : 'output.webm';
+        for (const attempt of attempts) {
+            // Check for explicit cancellation
+            if (status as string === 'cancelled') break;
 
-            await ffmpeg.writeFile(inputName, await fetchFile(file));
-
-            const args: string[] = ['-i', inputName];
-
-            // --- STRATEGY CALCULATION ---
-            let targetVideoBitrate = 0;
-            let targetAudioBitrate = options.stripAudio ? 0 : 128;
-            let targetFps = 30;
-            let targetWidth = options.width || 1280;
-            let targetHeight = options.height || 720;
-
-            if (options.targetSizeMB && duration > 0) {
-                const totalTargetBitrateKbps = (options.targetSizeMB * 8192) / duration;
-
-                // Reserve audio (fallback to 96 if extremely tight)
-                if (totalTargetBitrateKbps < 200 && !options.stripAudio) {
-                    targetAudioBitrate = 96;
-                    strategyLines.push('Áudio reduzido para 96kbps');
-                }
-
-                targetVideoBitrate = Math.max(totalTargetBitrateKbps - targetAudioBitrate, 300);
-
-                // --- AUTO RESOLUTION REDUCTION ---
-                // Heuristic: check pieces of bitrate relative to pixels
-                const calculateBpp = (bv: number, w: number, h: number, f: number) => (bv * 1000) / (w * h * f);
-
-                let bpp = calculateBpp(targetVideoBitrate, targetWidth, targetHeight, targetFps);
-
-                if (bpp < 0.06) {
-                    // Stage 1: 1080 -> 720
-                    if (targetWidth > 1280 || targetHeight > 1280) {
-                        const ratio = targetWidth / targetHeight;
-                        if (targetWidth > targetHeight) {
-                            targetWidth = 1280;
-                            targetHeight = Math.round(1280 / ratio);
-                        } else {
-                            targetHeight = 1280;
-                            targetWidth = Math.round(1280 * ratio);
-                        }
-                        strategyLines.push('Resolução: 720p');
-                    }
-
-                    bpp = calculateBpp(targetVideoBitrate, targetWidth, targetHeight, targetFps);
-                    // Stage 2: 720 -> 540
-                    if (bpp < 0.05) {
-                        targetWidth = Math.round(targetWidth * 0.75);
-                        targetHeight = Math.round(targetHeight * 0.75);
-                        strategyLines.push('Resolução: 540p');
-                    }
-
-                    bpp = calculateBpp(targetVideoBitrate, targetWidth, targetHeight, targetFps);
-                    // Stage 3: Reduce FPS
-                    if (bpp < 0.04) {
-                        targetFps = 24;
-                        strategyLines.push('FPS: 24');
-                    }
-
-                    bpp = calculateBpp(targetVideoBitrate, targetWidth, targetHeight, targetFps);
-                    // Stage 4: 540 -> 480
-                    if (bpp < 0.04) {
-                        targetWidth = Math.round(targetWidth * 0.8);
-                        targetHeight = Math.round(targetHeight * 0.8);
-                        strategyLines.push('Resolução: 480p');
-                    }
-                }
-
-                args.push('-b:v', `${Math.round(targetVideoBitrate)}k`);
-                if (!options.stripAudio) {
-                    args.push('-b:a', `${targetAudioBitrate}k`);
-                }
-            } else {
-                // No target size, use CRF
-                const crfMap = { low: 32, medium: 26, high: 21 }; // Slightly more aggressive for browser
-                args.push('-crf', crfMap[options.quality].toString());
-            }
-
-            // Apply calculated resolution and fps
-            // Use -vf "scale=W:H,fps=F"
-            // Ensure even numbers for x264
-            const finalW = targetWidth % 2 === 0 ? targetWidth : targetWidth - 1;
-            const finalH = targetHeight % 2 === 0 ? targetHeight : targetHeight - 1;
-            args.push('-vf', `scale=${finalW}:${finalH},fps=${targetFps}`);
-
-            // Video Codec
-            if (options.format === 'mp4') {
-                args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p');
-            } else {
-                args.push('-c:v', 'libvpx-vp9', '-deadline', 'realtime', '-cpu-used', '8');
-            }
-
-            // Audio
-            if (targetAudioBitrate === 0) {
-                args.push('-an');
-            } else if (options.format === 'mp4') {
-                args.push('-c:a', 'aac');
-            }
-
-            args.push(outputName);
-
-            const currentStrategy = strategyLines.length > 0 ? `Estratégia: ${strategyLines.join(', ')}` : 'Estratégia: Qualidade padrão otimizada';
-            setProgress(prev => ({ ...prev, appliedStrategy: currentStrategy }));
-
-            // EXECUTE
-            await ffmpeg.exec(args);
-
-            if (status as string === 'cancelled') return;
-
-            const data = await ffmpeg.readFile(outputName);
-            const blob = new Blob([data as any], { type: options.format === 'mp4' ? 'video/mp4' : 'video/webm' });
-
-            setOutputBlob(blob);
-            setStatus('done');
-
-            // Cleanup
             try {
-                await ffmpeg.deleteFile(inputName);
-                await ffmpeg.deleteFile(outputName);
-            } catch (e) {
-                console.warn('Cleanup warning:', e);
-            }
-
-        } catch (err) {
-            if (status !== 'cancelled') {
-                console.error('Conversion details:', err);
-
-                // DEEP CLEANUP ON ERROR
+                // RECREATE WORKER for each attempt to ensure fresh memory state
                 if (ffmpegRef.current) {
-                    try {
-                        const files = await ffmpegRef.current.listDir('/');
-                        for (const f of files) {
-                            if (!f.isDir) await ffmpegRef.current.deleteFile(f.name);
-                        }
-                    } catch (cleanupErr) {
-                        console.error('Final cleanup failed:', cleanupErr);
+                    try { ffmpegRef.current.terminate(); } catch (e) { }
+                    ffmpegRef.current = null;
+                }
+
+                const ffmpeg = await loadFFmpeg();
+                setStatus('converting');
+                startTimeRef.current = Date.now();
+
+                const inputName = 'input' + (file.name.substring(file.name.lastIndexOf('.')) || '.mp4');
+                const outputName = 'output.mp4'; // Always MP4 for best compatibility
+
+                const { fetchFile } = await import('@ffmpeg/util');
+                await ffmpeg.writeFile(inputName, await fetchFile(file));
+
+                const args: string[] = ['-i', inputName];
+
+                // --- STRATEGY CALCULATION PER ATTEMPT ---
+                let targetVideoBitrate = 0;
+                let targetAudioBitrate = options.stripAudio || attempt.id === 4 ? 0 : 96;
+                let targetFps = attempt.id >= 2 ? 20 : 24;
+                let targetWidth = options.width || 1280;
+                let targetHeight = options.height || 720;
+
+                // Adjust resolution on Attempt 3
+                if (attempt.id >= 3) {
+                    targetWidth = Math.round(targetWidth * 0.7);
+                    targetHeight = Math.round(targetHeight * 0.7);
+                }
+
+                if (options.targetSizeMB && duration > 0) {
+                    const totalTargetBitrateKbps = (options.targetSizeMB * 8192) / duration;
+                    targetVideoBitrate = Math.max(totalTargetBitrateKbps - targetAudioBitrate, 300);
+                    args.push('-b:v', `${Math.round(targetVideoBitrate)}k`);
+                    if (targetAudioBitrate > 0) {
+                        args.push('-b:a', `${targetAudioBitrate}k`);
                     }
+                } else {
+                    const crfMap = { low: 32, medium: 26, high: 21 };
+                    args.push('-crf', crfMap[options.quality].toString());
                 }
 
-                let msg = 'Ocorreu um erro durante a conversão.';
-                const errorStr = String(err).toLowerCase();
+                // Resolution and FPS (Ensure even dimensions for libx264)
+                const finalW = targetWidth % 2 === 0 ? targetWidth : targetWidth - 1;
+                const finalH = targetHeight % 2 === 0 ? targetHeight : targetHeight - 1;
+                args.push('-vf', `scale=${finalW}:${finalH},fps=${targetFps}`);
 
-                if (errorStr.includes('memory') || errorStr.includes('buffer') || file.size > 500 * 1024 * 1024) {
-                    msg = 'Seu navegador não conseguiu processar esse arquivo com essas configurações. Tente novamente com uma resolução menor ou tamanho alvo maior.';
+                // Codec and Presets (Forced for maximum compatibility and speed in browser)
+                args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-pix_fmt', 'yuv420p');
+
+                // Audio codec
+                if (targetAudioBitrate === 0) {
+                    args.push('-an');
+                } else {
+                    args.push('-c:a', 'aac');
                 }
 
-                setErrorMessage(msg);
-                setStatus('error');
+                args.push(outputName);
+
+                // Update specific strategy reporting
+                setProgress(prev => ({
+                    ...prev,
+                    appliedStrategy: `Tentativa ${attempt.id}/4: ${attempt.label}`
+                }));
+
+                // EXECUTE conversion
+                await ffmpeg.exec(args);
+
+                // If execution finishes, check if we weren't cancelled mid-way
+                if (status as string === 'cancelled') return;
+
+                const data = await ffmpeg.readFile(outputName);
+                const blob = new Blob([data as any], { type: 'video/mp4' });
+
+                setOutputBlob(blob);
+                setStatus('done');
+
+                // Cleanup and Exit loop
+                try {
+                    await ffmpeg.deleteFile(inputName);
+                    await ffmpeg.deleteFile(outputName);
+                } catch (e) { }
+                return;
+
+            } catch (err) {
+                console.error(`Attempt ${attempt.id} failed:`, err);
+
+                // If it's the last attempt and it failed, show final error
+                if (attempt.id === 4) {
+                    const errorStr = String(err).toLowerCase();
+                    let msg = 'Seu navegador não conseguiu processar esse arquivo. Tente novamente com uma resolução menor ou tamanho alvo maior.';
+                    if (errorStr.includes('memory') || errorStr.includes('buffer')) {
+                        msg = 'Erro de Memória: Arquivo muito grande para o seu navegador. Tente fechar outras abas ou usar um tamanho alvo maior.';
+                    }
+                    setErrorMessage(msg);
+                    setStatus('error');
+                } else {
+                    // Small delay to allow browser to breath before next try
+                    await new Promise(r => setTimeout(r, 1000));
+                }
             }
         }
     };
@@ -229,10 +190,11 @@ export const useFFmpeg = () => {
         setProgress({ percentage: 0, timeElapsed: 0 });
         setOutputBlob(null);
         setErrorMessage(null);
+        if (ffmpegRef.current) {
+            try { ffmpegRef.current.terminate(); } catch (e) { }
+            ffmpegRef.current = null;
+        }
     }, []);
 
     return { status, progress, outputBlob, errorMessage, convert, cancel, reset, setStatus };
-};
-
-return { status, progress, outputBlob, errorMessage, convert, cancel, reset, setStatus };
 };
