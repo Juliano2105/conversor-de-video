@@ -70,14 +70,18 @@ export const useFFmpeg = () => {
     };
 
     const convert = async (file: File, options: ConversionOptions, duration: number) => {
-        // Define progressive attempts with clearer labels and steps
-        const attempts = [
-            { id: 1, label: 'Otimizando qualidade...' },
-            { id: 2, label: 'Ajustando fluidez (FPS: 20)' },
-            { id: 3, label: 'Reduzindo impacto visual (30% menor)' },
-            { id: 4, label: 'Modo de Segurança: Removendo áudio' },
-            { id: 5, label: 'Modo Crítico: Resolução mínima (360p)' }
-        ];
+        const hasTargetSize = options.targetSizeMB && options.targetSizeMB > 0;
+
+        // Define progressive attempts ONLY if we have a target size
+        const attempts = hasTargetSize
+            ? [
+                { id: 1, label: 'Otimizando qualidade...' },
+                { id: 2, label: 'Ajustando fluidez (FPS: 20)' },
+                { id: 3, label: 'Reduzindo impacto visual (30% menor)' },
+                { id: 4, label: 'Modo de Segurança: Removendo áudio' },
+                { id: 5, label: 'Modo Crítico: Resolução mínima (360p)' }
+            ]
+            : [{ id: 1, label: 'Convertendo com Qualidade Visual' }];
 
         for (const attempt of attempts) {
             if (status as string === 'cancelled') break;
@@ -99,67 +103,73 @@ export const useFFmpeg = () => {
 
                 const { fetchFile } = await import('@ffmpeg/util');
 
-                // Progress report before heavy file operation
+                // Progress report
                 setProgress(prev => ({
                     ...prev,
                     percentage: 0,
-                    appliedStrategy: `Preparando arquivo... (Tentativa ${attempt.id}/5)`
+                    appliedStrategy: hasTargetSize
+                        ? `Preparando arquivo... (Tentativa ${attempt.id}/5)`
+                        : 'Preparando conversão local...'
                 }));
 
                 await ffmpeg.writeFile(inputName, await fetchFile(file));
 
                 const args: string[] = ['-i', inputName];
 
-                // MOV handling for stability
+                // MOV/MP4 optimization headers
+                args.push('-movflags', '+faststart');
                 if (inputExt === '.mov') {
                     args.splice(1, 0, '-fflags', '+genpts');
                 }
 
-                // --- STRATEGY CALCULATION ---
-                let targetVideoBitrate = 0;
-                let targetAudioBitrate = options.stripAudio || attempt.id >= 4 ? 0 : 96;
-                let targetFps = attempt.id >= 2 ? 20 : 24;
-                let targetWidth = options.width || 1280;
-                let targetHeight = options.height || 720;
+                // --- PATH A: BITRATE (TARGET SIZE DEFINED) ---
+                if (hasTargetSize) {
+                    let targetAudioBitrate = options.stripAudio || attempt.id >= 4 ? 0 : 96;
+                    let targetFps = attempt.id >= 2 ? 20 : 24;
+                    let targetWidth = options.width || 1280;
+                    let targetHeight = options.height || 720;
 
-                // Scale down logic
-                if (attempt.id === 3) {
-                    targetWidth = Math.round(targetWidth * 0.7);
-                    targetHeight = Math.round(targetHeight * 0.7);
-                } else if (attempt.id >= 5) {
-                    // Force 360p or lower on final attempt
-                    const ratio = targetWidth / targetHeight;
-                    if (targetWidth > targetHeight) {
-                        targetWidth = 640;
-                        targetHeight = Math.round(640 / ratio);
-                    } else {
-                        targetHeight = 640;
-                        targetWidth = Math.round(640 * ratio);
+                    if (attempt.id === 3) {
+                        targetWidth = Math.round(targetWidth * 0.7);
+                        targetHeight = Math.round(targetHeight * 0.7);
+                    } else if (attempt.id >= 5) {
+                        const ratio = targetWidth / targetHeight;
+                        if (targetWidth > targetHeight) {
+                            targetWidth = 640;
+                            targetHeight = Math.round(640 / ratio);
+                        } else {
+                            targetHeight = 640;
+                            targetWidth = Math.round(640 * ratio);
+                        }
                     }
-                }
 
-                if (options.targetSizeMB && duration > 0) {
-                    const totalTargetBitrateKbps = (options.targetSizeMB * 8192) / duration;
-                    targetVideoBitrate = Math.max(totalTargetBitrateKbps - targetAudioBitrate, 250);
+                    const totalTargetBitrateKbps = (options.targetSizeMB! * 8192) / duration;
+                    const targetVideoBitrate = Math.max(totalTargetBitrateKbps - targetAudioBitrate, 250);
+
                     args.push('-b:v', `${Math.round(targetVideoBitrate)}k`);
-                    if (targetAudioBitrate > 0) {
-                        args.push('-b:a', `${targetAudioBitrate}k`);
-                    }
-                } else {
-                    // Variable bitrate
-                    const crfMap = { low: 32, medium: 26, high: 21 };
-                    args.push('-crf', crfMap[options.quality].toString());
+                    if (targetAudioBitrate > 0) args.push('-b:a', `${targetAudioBitrate}k`);
+
+                    const finalW = targetWidth % 2 === 0 ? targetWidth : targetWidth - 1;
+                    const finalH = targetHeight % 2 === 0 ? targetHeight : targetHeight - 1;
+                    args.push('-vf', `scale=${finalW}:${finalH},fps=${targetFps}`);
+                }
+                // --- PATH B: CRF (NO TARGET SIZE) ---
+                else {
+                    const crfValues = { low: 28, medium: 23, high: 18 };
+                    args.push('-crf', crfValues[options.quality].toString());
+
+                    // Maintain resolution/fps if possible, or just use scale filter for even dims
+                    const w = options.width || 1280;
+                    const h = options.height || 720;
+                    const finalW = w % 2 === 0 ? w : w - 1;
+                    const finalH = h % 2 === 0 ? h : h - 1;
+                    args.push('-vf', `scale=${finalW}:${finalH}`);
                 }
 
-                // Ensure even dimensions for libx264
-                const finalW = targetWidth % 2 === 0 ? targetWidth : targetWidth - 1;
-                const finalH = targetHeight % 2 === 0 ? targetHeight : targetHeight - 1;
-                args.push('-vf', `scale=${finalW}:${finalH},fps=${targetFps}`);
+                // Common settings
+                args.push('-c:v', 'libx264', '-preset', 'veryfast', '-pix_fmt', 'yuv420p');
 
-                // Codec tuning for browser memory
-                args.push('-c:v', 'libx264', '-preset', 'ultrafast', '-tune', 'fastdecode', '-pix_fmt', 'yuv420p');
-
-                if (targetAudioBitrate === 0) {
+                if (options.stripAudio || (hasTargetSize && attempt.id >= 4)) {
                     args.push('-an');
                 } else {
                     args.push('-c:a', 'aac');
@@ -169,10 +179,9 @@ export const useFFmpeg = () => {
 
                 setProgress(prev => ({
                     ...prev,
-                    appliedStrategy: `Processando: ${attempt.label}`
+                    appliedStrategy: hasTargetSize ? `Processando: ${attempt.label}` : 'Estratégia: Alta Qualidade Local'
                 }));
 
-                // EXECUTE
                 await ffmpeg.exec(args);
 
                 if (status as string === 'cancelled') return;
@@ -183,7 +192,6 @@ export const useFFmpeg = () => {
                 setOutputBlob(blob);
                 setStatus('done');
 
-                // Cleanup
                 try {
                     await ffmpeg.deleteFile(inputName);
                     await ffmpeg.deleteFile(outputName);
@@ -191,18 +199,22 @@ export const useFFmpeg = () => {
                 return;
 
             } catch (err) {
-                console.error(`Attempt ${attempt.id} Error:`, err);
+                console.error(`Conversion ${hasTargetSize ? 'Attempt ' + attempt.id : ''} Error:`, err);
 
                 if (ffmpegRef.current) {
                     try { ffmpegRef.current.terminate(); } catch (e) { }
                     ffmpegRef.current = null;
                 }
 
-                if (attempt.id === 5) {
-                    setErrorMessage('O navegador atingiu o limite de memória. Tente um "Tamanho Alvo (MB)" maior ou reduza a resolução para 480p ou menos.');
+                if (!hasTargetSize || attempt.id === 5) {
+                    const baseMsg = hasTargetSize
+                        ? 'Seu navegador não conseguiu processar com esse tamanho alvo agressivo.'
+                        : 'Ocorreu um erro inesperado durante a conversão local.';
+
+                    setErrorMessage(`${baseMsg} Verifique o log de debug abaixo para mais detalhes.`);
                     setStatus('error');
+                    break;
                 } else {
-                    // Cooldown
                     await new Promise(r => setTimeout(r, 1000));
                 }
             }
